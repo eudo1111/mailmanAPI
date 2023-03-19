@@ -1,13 +1,15 @@
 <?php
 
 namespace splattner\mailmanapi;
+require 'vendor/autoload.php';
 
 use GuzzleHttp\Client;
-
+#[\AllowDynamicProperties]
 class MailmanAPI {
 
 	private $mailmanURL;
 	private $password;
+	private $user;
 	private $client;
 
 	/**
@@ -15,75 +17,110 @@ class MailmanAPI {
 	 *  Mailman Base URL
 	 * @param $password
 	 *  Administration Passwort for your Mailman List
+	 * @param $user
+	 * Username
 	 */
-	public function __construct($mailmalurl, $password, $validade_ssl_certs = true) {
+	public function __construct($mailmanurl, $password, $user, $validade_ssl_certs = true) {
 
-		$this->mailmanURL = $mailmalurl;
+		$this->mailmanURL = $mailmanurl;
 		$this->password = $password;
+		$this->user = $user;
+		$this->jar = new \GuzzleHttp\Cookie\CookieJar;
 
-		$this->client = new Client(['base_uri' => $this->mailmanURL, 'cookies' => true, 'verify' => $validade_ssl_certs]);
+		$this->client = new Client([
+			'base_uri' => $this->mailmanURL,
+			'cookie' => true,
+			'verify' => true,
+			'allow_redirects' =>  true,
+			'cookies' => $this->jar
 
-		$response = $this->client->request('POST', '', [
-    'form_params' => [
-        'adminpw' => $this->password
-    	]
 		]);
-
+		$url = '/accounts/login';
+		$token = $this->getCSRFToken($url);
+		$response = $this->client->post( '/accounts/login/', [
+			'form_params' => [
+				'login' => $this->user,
+				'password' => $this->password,
+				'csrfmiddlewaretoken' => $token,
+				'next' => '/mailman3/lists/'
+			],
+			'cookies' => $this->jar,
+			'debug' => false
+		]);
+		$dom = new \DOMDocument;
+			// set error level
+		$internalErrors = libxml_use_internal_errors(true);
+		$dom->loadHTML($response->getBody());
+		libxml_use_internal_errors($internalErrors);
 	}
 
+	/**
+	 * Return Array of all Mailman Lists
+	 */
+	public function getMaillists() {
+		$response = $this->client->request('GET', '/mailman3/lists/', ['cookies' => $this->jar]);
+		$dom = new \DOMDocument;
+		$internalErrors = libxml_use_internal_errors(true);
+		$dom->loadHTML($response->getBody());
+		libxml_use_internal_errors($internalErrors);	
+		$tables = $dom->getElementsByTagName("table")[0];
+		$trs = $tables->getElementsByTagName("tr");
+		return $this->getMembersFromTableRows($trs, $isSinglePage = true);
+	}
 
 	/**
 	 * Return Array of all Members in a Mailman List
 	 */
 	public function getMemberlist() {
-
-		$response = $this->client->request('GET', $this->mailmanURL . '/members');
+		$response = $this->client->request('GET', $this->mailmanURL . '/members/member/?count=200', ['cookies' => $this->jar]);
 
 		$dom = new \DOMDocument;
+		$internalErrors = libxml_use_internal_errors(true);
 		$dom->loadHTML($response->getBody());
-
-		$tables = $dom->getElementsByTagName("table")[4];
-
+		libxml_use_internal_errors($internalErrors);	
+		$tables = $dom->getElementsByTagName("table")[0];
 		$trs = $tables->getElementsByTagName("tr");
 
-		// Get all the urs for the letters
-		$letterLinks = $trs[1];
-		$links = $letterLinks->getElementsByTagName("a");
-
+		$finder = new \DomXPath($dom);
+		$pagination = $finder->query("//*[contains(@class, 'page-link')]");
+		
 		$memberList = array();
-
-		if (count($links) === 0) {
+		if (count($pagination) === 0) {
 			return $this->getMembersFromTableRows($trs, $isSinglePage = true);
 		}
 
 		$urlsForLetters = array();
 
-		foreach($links as $link) {
+		foreach($pagination as $link) {
 			$urlsForLetters[] =  $link->getAttribute('href');
 		}
 
+		// Remove "Previous" & "Next"
+		array_pop($urlsForLetters);
+		array_shift($urlsForLetters);
+		
 		foreach($urlsForLetters as $url) {
-			$response = $this->client->request('GET', $url);
+			// For first page we already have the members
+			if (!empty($url)) {
+				$response = $this->client->request('GET', $this->mailmanURL . '/members/member/' . $url, ['cookies' => $this->jar]);
+				$dom = new \DOMDocument('1.0', 'UTF-8');
 
-			$dom = new \DOMDocument('1.0', 'UTF-8');
+				// set error level
+				$internalErrors = libxml_use_internal_errors(true);
 
-			// set error level
-			$internalErrors = libxml_use_internal_errors(true);
+				$dom->loadHTML($response->getBody());
 
-			$dom->loadHTML($response->getBody());
+				// Restore error level
+				libxml_use_internal_errors($internalErrors);
 
-			// Restore error level
-			libxml_use_internal_errors($internalErrors);
-
-			$tables = $dom->getElementsByTagName("table")[4];
-			$trs = $tables->getElementsByTagName("tr");
-
+				$tables = $dom->getElementsByTagName("table")[0];
+				$trs = $tables->getElementsByTagName("tr");
+			}
 			$memberList = array_merge(
 				$memberList,
 				$this->getMembersFromTableRows($trs)
 			);
 		}
-
 		return $memberList;
 	}
 
@@ -97,13 +134,11 @@ class MailmanAPI {
 	 */
 	protected function getMembersFromTableRows($trs, $isSinglePage = false)
 	{
-		$firstRowIndex = $isSinglePage ? 2 : 3;
-
 		$memberList = [];
 
-		for ($i = $firstRowIndex; $i < $trs->length; $i++) {
+		for ($i = 1; $i < $trs->length; $i++) {
 			$tds = $trs[$i]->getElementsByTagName("td");
-			$memberList[] = $tds[1]->nodeValue;
+			$memberList[] = trim($tds[1]->nodeValue);
 		}
 
 		return $memberList;
@@ -117,21 +152,20 @@ class MailmanAPI {
 	 *  Array of Members that were successfully added
 	 */
 	public function addMembers($members) {
-
-		$token = $this->getCSRFToken("add");
-
-		$response = $this->client->request('POST', $this->mailmanURL . '/members/add', [
+		$url = $this->mailmanURL . '/mass_subscribe/';
+		$token = $this->getCSRFToken($url);
+		$response = $this->client->request('POST', $url, [
 			'form_params' => [
-				'csrf_token' => $token,
-				'subscribe_or_invite' => '0',
-				'send_welcome_msg_to_this_batch' => '0',
-				'send_notifications_to_list_owner' => '0',
-				'subscribees' => join(chr(10), $members),
-				'setmemberopts_btn' => 'Änderungen speichern'
-			]
+				'csrfmiddlewaretoken' => $token,
+				'emails' => join(chr(10), $members),
+				'pre_confirmed' => '1',
+				'pre_approved' => '1',
+				'pre_verified' => '1',
+				'send_welcome_message' => 'False'
+			],
+			'cookies' => $this->jar
 		]);
-
-
+		$internalErrors = libxml_use_internal_errors(true);
 		return $this->parseResultList($response->getBody());
 	}
 
@@ -144,48 +178,18 @@ class MailmanAPI {
 	 */
 	public function removeMembers($members) {
 
-		$token = $this->getCSRFToken("remove");
+		$url = $this->mailmanURL . '/mass_removal/';
+		$token = $this->getCSRFToken($url);
 
-		$response = $this->client->request('POST', $this->mailmanURL . '/members/remove', [
+		$response = $this->client->request('POST', $url, [
 			'form_params' => [
-				'csrf_token' => $token,
-				'send_unsub_ack_to_this_batch' => '0',
-				'send_unsub_notifications_to_list_owner' => '0',
-				'unsubscribees' => join(chr(10), $members),
-				'setmemberopts_btn' => 'Änderungen speichern'
-			]
+				'csrfmiddlewaretoken' => $token,
+				'emails' => join(chr(10), $members)
+			],
+			'cookies' => $this->jar
 		]);
-
+		$internalErrors = libxml_use_internal_errors(true);
 		return $this->parseResultList($response->getBody());
-	}
-
-	/**
-	 * Change Address for a member
-	 * @param $memberFrom
-	 *  The Adress from the member you wanna change
-	 * @param $memberTo
-	 *  The Adress it should be changed to
-
-	 */
-	public function changeMember($memberFrom, $memberTo) {
-
-		$token = $this->getCSRFToken("change");
-		$response = $this->client->request('POST', $this->mailmanURL . '/members/change', [
-			'form_params' => [
-				'csrf_token' => $token,
-				'change_from' => $memberFrom,
-				'change_to' => $memberTo,
-				'setmemberopts_btn' => 'Änderungen speichern'
-			]
-		]);
-
-		$dom = new \DOMDocument;
-		$dom->loadHTML($response->getBody());
-
-		$h3 = $dom->getElementsByTagName("h3")[0];
-
-		return (strpos($h3->nodeValue, $memberFrom) == True && strpos($h3->nodeValue, $memberTo) == True);
-
 	}
 
 	/**
@@ -196,48 +200,41 @@ class MailmanAPI {
 	 * Array of Entrys that were successfull
 	 */
 	private function parseResultList($body) {
-
 		$dom = new \DOMDocument;
 		$dom->loadHTML($body);
-
 		$result = array();
+		$finder = new \DomXPath($dom);
 
-		// Are there entrys with success?
-		$haveSuccessfullEntry = $dom->getElementsByTagName("h5")[0] != null;
-
-		if ($haveSuccessfullEntry) {
-			$uls = $dom->getElementsByTagName("ul")[0];
-			$lis = $uls->getElementsByTagName("li");
-
-			foreach($lis as $li) {
-				// Warning after --
-				if (strpos($li->nodeValue, '--') == False) {
-					$result[] = $li->nodeValue;
-				}
+		// Get the alerts (success & error)
+		$alerts = $finder->query("//*[contains(@class, 'alert')]"); 
+		if ($alerts) {
+			foreach($alerts as $alert) {
+					$result[] = trim($alert->nodeValue);
 			}
 		}
-
 		return $result;
 	}
 
 	/*
 	 * Get CSRF Token for a Page
 	 * @param $page
-	 *  the Page you want the token for
+	 * 	the Page you want the token for
 	 */
 	private function getCSRFToken($page) {
-
-		$response = $this->client->request('GET', $this->mailmanURL . '/members');
-
+		$response = $this->client->request('GET', $page, [
+			'cookies' => $this->jar
+		]);
 		$dom = new \DOMDocument;
+		// set error level
+		$internalErrors = libxml_use_internal_errors(true);
 		$dom->loadHTML($response->getBody());
+		// Restore error level
+		libxml_use_internal_errors($internalErrors);
 
-		$form = $dom->getElementsByTagName("form")[0];
-
-		return $form->getElementsByTagName("input")[0]->getAttribute("value");
+		$xp = new \DOMXpath($dom);
+		$finder = $xp->query('//input[@name="csrfmiddlewaretoken"]');
+		$element = $finder->item(0);
+		return $element->getAttribute('value');
 	}
-
 }
-
-
 ?>

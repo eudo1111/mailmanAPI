@@ -1,23 +1,21 @@
 {
-
-  "name" : "splattner/mailmanapi",
-  "version" : "1.2.0",
+  "name" : "eudo1111/mailmanapi",
+  "version" : "1.0.0",
   "type" : "library",
   "license": "MIT",
-  "description": "A simple API to work with Mailman 2.x Mailing Lists",
-  "homepage" : "https://github.com/splattner/mailmanAPI",
+  "description": "A simple API-script to work with Mailman 3.x Mailing Lists",
+  "homepage" : "https://github.com/eudo1111/mailmanAPI",
 
   "authors": [
     {
-      "name": "Sebastian Plattner",
-      "email": "sebastian.plattner@gmail.com",
-      "role": "Developer"
+      "name": "E. Dorn",
+      "email": "github@dorn.io",
+      "role": "Engineer"
     }
   ],
 
   "require": {
-    "guzzlehttp/guzzle": "~6.0",
-    "paquettg/php-html-parser": "^1.7"
+    "guzzlehttp/guzzle": "~7.0"
   },
   "autoload": {
     "files": [

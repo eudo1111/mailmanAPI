@@ -1,6 +1,15 @@
 # Changelog
+
 ## [Unreleased]
 
-## [1.2.0] - 2018-08-29
-## Fixed
-- Make getMemberList() work on lists with few subscribers #1
+## [1.0.0] - 2023-03-19
+
+## Added
+
+- First release for mailman 3.x
+
+## [fork] - 2023-03-19
+
+## Added
+
+- Fork from splattner/mailmanAPI
