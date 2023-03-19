@@ -1,10 +1,11 @@
 <?php
 
-namespace splattner\mailmanapi;
-require 'vendor/autoload.php';
+namespace eudo1111\mailmanapi;
 
 use GuzzleHttp\Client;
+
 #[\AllowDynamicProperties]
+
 class MailmanAPI {
 
 	private $mailmanURL;
@@ -138,9 +139,12 @@ class MailmanAPI {
 
 		for ($i = 1; $i < $trs->length; $i++) {
 			$tds = $trs[$i]->getElementsByTagName("td");
-			$memberList[] = trim($tds[1]->nodeValue);
+			$member = trim($tds[1]->nodeValue);
+			// Only get Email
+			$pattern = '/[a-z0-9_\-\+\.]+@[a-z0-9\-]+\.([a-z]{2,4})(?:\.[a-z]{2})?/i';
+			preg_match($pattern, $member, $matches);
+			$memberList[] = $matches[0];
 		}
-
 		return $memberList;
 	}
 
